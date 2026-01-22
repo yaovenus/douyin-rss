@@ -3,7 +3,7 @@ import os
 import random
 from datetime import datetime, timezone, timedelta
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth.stealth import stealth_async 
 from feedgen.feed import FeedGenerator
 
 # --- 配置区域 ---
