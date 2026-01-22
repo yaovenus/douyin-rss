@@ -1,0 +1,4 @@
+playwright
+feedgen
+lxml
+playwright-stealth
