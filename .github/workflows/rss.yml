@@ -1,0 +1,38 @@
+name: Update RSS Feed
+
+on:
+  schedule:
+    - cron: '0 */8 * * *'  # 每8小时运行一次
+  workflow_dispatch:      # 允许手动点按钮运行
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        playwright install chromium
+
+    - name: Run scraper
+      run: python main.py
+
+    - name: Commit and push if changed
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add feed.xml
+        git commit -m "Update RSS feed" || exit 0
+        git push
