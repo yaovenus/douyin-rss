@@ -148,15 +148,24 @@ def main():
         
         iv_link, real_title = post_to_telegraph(article_url)
         
-        if iv_link and real_title:
-            # 【极简外观】
-            # 只发送一个超链接标题。
-            # <a href='{iv_link}'>&#8203;</a> 用于触发 Telegram 的大图预览
-            # 这里的 href 指向 Telegraph 纯净版页面
-            msg_text = f"<a href='{iv_link}'>&#8203;</a><b><a href='{iv_link}'>{real_title}</a></b>"
+        if iv_link:
+            # 成功生成！
+            # 构造消息：
+            # 1. <a href='{iv_link}'>&#8203;</a> 是隐形链接，用于强制显示 Telegraph 大图预览 (即图中的④)
+            # 2. ⚡️ 标题：保留点击标题跳转的功能 (即图中的①)
+            # 3. 删除了 ② (原文链接文本) 和 ③ (底部按钮)
+            msg_text = (
+                f"<a href='{iv_link}'>&#8203;</a>"
+                f"⚡️ <b><a href='{iv_link}'>{real_title}</a></b>"
+            )
+            
+            # 设置键盘为 None，即不发送底部按钮
+            keyboard = None
+            
         else:
-            # 失败兜底：发送原链接
-            msg_text = article_url
+            # 失败兜底逻辑 (也可以根据需要精简)
+            msg_text = f"📢 <b><a href='{article_url}'>{real_title}</a></b>"
+            keyboard = None
 
         # 发送 (注意：这里不再传入 keyboard 参数，即不显示按钮)
         send_msg(msg_text)
