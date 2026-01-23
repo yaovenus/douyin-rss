@@ -19,6 +19,7 @@ def post_to_telegraph(url):
     try:
         t = TelegraphPoster(use_api=True, access_token=TELEGRAPH_TOKEN)
         
+        # 伪装浏览器 User-Agent
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0'}
         response = requests.get(url, headers=headers, timeout=10)
         response.encoding = 'utf-8'
@@ -50,7 +51,8 @@ def post_to_telegraph(url):
             "CN2", "GIA", "科学上网", "Shadowsocks", "V2ray", "每月仅需", # 底部广告
             "tags :", "tags:", # 标签列表
             "加入品葱精选", # 底部推广
-            "Previous post", "Next post" # 翻页导航
+            "Previous post", "Next post", # 翻页导航
+            "by 华北平原" # 作者行
         ]
 
         # 遍历所有段落、列表、div，进行“内容审查”
@@ -108,7 +110,7 @@ def post_to_telegraph(url):
         print(f"Telegraph 发布失败: {e}")
         return None, None
 
-# --- 发送消息 ---
+# --- 发送消息 (极简版) ---
 def send_msg(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {
@@ -147,10 +149,16 @@ def main():
         iv_link, real_title = post_to_telegraph(article_url)
         
         if iv_link and real_title:
+            # 【极简外观】
+            # 只发送一个超链接标题。
+            # <a href='{iv_link}'>&#8203;</a> 用于触发 Telegram 的大图预览
+            # 这里的 href 指向 Telegraph 纯净版页面
             msg_text = f"<a href='{iv_link}'>&#8203;</a><b><a href='{iv_link}'>{real_title}</a></b>"
         else:
+            # 失败兜底：发送原链接
             msg_text = article_url
 
+        # 发送 (注意：这里不再传入 keyboard 参数，即不显示按钮)
         send_msg(msg_text)
 
         with open(DB_FILE, "w") as f:
