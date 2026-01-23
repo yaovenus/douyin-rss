@@ -1,17 +1,17 @@
-name: Update RSS Feed
+name: Check RSS Feed
 
 on:
   schedule:
-    - cron: '0 */2 * * *'  # 每2小时运行一次
-  workflow_dispatch:      # 允许手动运行
-
-permissions:
-  contents: write
+    # 每 30 分钟运行一次 (可自行修改，比如 */15)
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # 允许手动点击运行测试
 
 jobs:
-  build:
+  check_rss:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write  # 赋予写入权限，以便更新记录文件
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -24,21 +24,17 @@ jobs:
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
-        playwright install chromium
 
-    - name: Run scraper
+    - name: Run script
+      env:
+        TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       run: python main.py
 
     - name: Commit and push if changed
       run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-        
-        # 【修改点】先检查文件是否存在，防止报错
-        if [ -f feed.xml ]; then
-          git add feed.xml
-          git commit -m "Update RSS feed" || echo "No changes to commit"
-          git push
-        else
-          echo "警告：本次未生成 feed.xml (可能未抓取到数据)，跳过提交步骤。"
-        fi
+        git config --global user.name 'GitHub Action'
+        git config --global user.email 'action@github.com'
+        # 如果 last_processed_id.txt 有变化，就提交回仓库
+        git add last_processed_id.txt
+        git diff --quiet && git diff --staged --quiet || (git commit -m "Update last processed ID" && git push)
