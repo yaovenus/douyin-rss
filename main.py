@@ -14,8 +14,19 @@ CHAT_ID = os.environ["TG_CHAT_ID"]
 TELEGRAPH_TOKEN = os.environ["TELEGRAPH_TOKEN"]
 DB_FILE = "last_processed_id.txt"
 
-# --- 核心功能：强力清洗并发布 ---
-def post_to_telegraph(url, title):
+# --- 辅助函数：获取网页 Meta 信息 ---
+def get_meta_content(soup, property_name):
+    # 尝试查找 <meta property="og:xxx">
+    tag = soup.find('meta', property=property_name)
+    if not tag:
+        # 尝试查找 <meta name="xxx">
+        tag = soup.find('meta', attrs={'name': property_name})
+    if tag and tag.get('content'):
+        return tag['content']
+    return None
+
+# --- 核心功能：精准提取并发布 ---
+def post_to_telegraph(url):
     try:
         t = TelegraphPoster(use_api=True, access_token=TELEGRAPH_TOKEN)
         
@@ -24,79 +35,78 @@ def post_to_telegraph(url, title):
         response.encoding = 'utf-8'
         
         soup = BeautifulSoup(response.text, 'html.parser')
+
+        # 1. 【修复标题】优先抓取 og:title，其次抓取 h1
+        real_title = get_meta_content(soup, 'og:title')
+        if not real_title:
+            h1 = soup.find('h1')
+            if h1:
+                real_title = h1.get_text().strip()
+            else:
+                real_title = soup.title.string.strip() if soup.title else "未命名文章"
         
-        # 1. 定位正文
-        # 针对该网站结构，通常内容在 class="post_content" 或 "article" 中
+        # 移除标题中常见的后缀 (如果有)
+        real_title = real_title.split(' - ')[0].split(' | ')[0]
+
+        # 2. 【修复图片】获取封面图
+        cover_image_url = get_meta_content(soup, 'og:image')
+
+        # 3. 【精准定位正文】
+        # 针对该类网站，通常内容在 class="post_content" 或 "entry-content"
         content = soup.find('div', class_='post_content')
+        if not content:
+            content = soup.find('div', class_='entry-content')
         if not content:
             content = soup.find('article')
         if not content:
+            # 最后的兜底，但要小心不要抓到 footer
             content = soup.body
 
-        # 2. 【深度净化】移除干扰元素
-        # 定义要删除的关键词 (类名或ID包含这些词的元素会被删掉)
-        garbage_keywords = [
-            'related', 'recommend', 'footer', 'sidebar', 'nav', 'menu', 
-            'comment', 'share', 'ads', 'promo', 'pager', 'pagination', 
-            'next', 'prev', 'copyright'
-        ]
-
-        # 删除所有 <script>, <style>, <iframe... 等标签
-        for tag in content(['script', 'style', 'iframe', 'button', 'input', 'form', 'noscript']):
+        # 4. 【温柔清洗】只删除绝对的垃圾，不再按关键词误杀
+        # 删除脚本、样式、iframe
+        for tag in content(['script', 'style', 'iframe', 'noscript', 'button', 'input']):
             tag.decompose()
-
-        # 针对 div, ul, section 等容器进行关键词扫描
-        for tag in content.find_all(['div', 'ul', 'section', 'aside', 'footer', 'nav']):
-            # 获取 class 和 id 属性
-            classes = tag.get('class', [])
-            ids = tag.get('id', [])
-            # 组合成字符串方便检查
-            check_str = " ".join(classes) + " " + str(ids)
             
-            # 如果包含垃圾关键词，直接删除该区块
-            if any(keyword in check_str.lower() for keyword in garbage_keywords):
+        # 删除明确的垃圾块 (广告、分享栏、评论区)
+        # 这里只删除包含特定 class 的 div，防止误删正文
+        bad_classes = ['share', 'comment', 'ads', 'related', 'recommend', 'footer', 'sidebar']
+        for tag in content.find_all('div'):
+            classes = tag.get('class', [])
+            if any(bad in str(c).lower() for c in classes for bad in bad_classes):
                 tag.decompose()
         
-        # 额外清理：删除很多博客底部都会有的“空链接”或“标签列表”
-        for tag in content.find_all('div', class_='tags'):
-            tag.decompose()
+        # 删除底部的“上一篇/下一篇”导航 (通常在 ul 或 nav 里)
+        for tag in content.find_all(['nav', 'ul', 'li']):
+             if 'pager' in str(tag.get('class', [])) or 'pagination' in str(tag.get('class', [])):
+                 tag.decompose()
 
-        # 3. 发布到 Telegraph
+        # 5. 发布到 Telegraph
+        # 注意：这里我们手动把封面图插入到正文最前面，确保预览一定有图
+        html_content = str(content)
+        if cover_image_url:
+            # 这一步是为了让 Telegraph 识别到封面图
+            html_content = f'<img src="{cover_image_url}"><br>' + html_content
+
         result = t.post(
-            title=title,
+            title=real_title,
             author='品葱精选',
             author_url=url,
-            text=str(content)
+            text=html_content
         )
-        return result['url']
+        
+        return result['url'], real_title
 
     except Exception as e:
         print(f"Telegraph 发布失败: {e}")
-        return None
+        return None, None
 
-# --- 获取标题 ---
-def get_website_title(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        response.encoding = 'utf-8'
-        match = re.search(r'<title>(.*?)</title>', response.text, re.IGNORECASE)
-        if match:
-            # 清理标题中的多余后缀 (比如 " - 品葱")
-            clean_title = match.group(1).split('|')[0].split('-')[0].strip()
-            return clean_title
-    except:
-        pass
-    return "未命名文章"
-
-# --- 发送消息 (极简版) ---
+# --- 发送消息 ---
 def send_msg(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {
         "chat_id": CHAT_ID, 
         "text": text, 
         "parse_mode": "HTML",
-        # 关键：开启预览，这样才会显示 Instant View 卡片
         "disable_web_page_preview": False 
     }
     requests.post(url, data=data)
@@ -115,7 +125,7 @@ def main():
         return
 
     entry = feed.entries[0]
-    article_url = entry.title # 原始 RSS 特性
+    article_url = entry.title # 原始 RSS 链接
     latest_id = entry.get("id", entry.get("link", ""))
 
     last_id = ""
@@ -126,26 +136,22 @@ def main():
     if latest_id != last_id:
         print(f"处理新文章: {article_url}")
         
-        # 1. 获取并净化标题
-        real_title = get_website_title(article_url)
+        # 生成 Telegraph 页面
+        iv_link, real_title = post_to_telegraph(article_url)
         
-        # 2. 生成纯净版 IV 页面
-        iv_link = post_to_telegraph(article_url, real_title)
-        
-        if iv_link:
-            # 【极简外观】
-            # 只发送一个超链接标题。
-            # Telegram 会检测到这个链接是 telegra.ph，自动展示 IV 按钮。
-            # 这里的 href 是 Telegraph 的链接，显示的文字是文章标题。
-            msg_text = f"<a href='{iv_link}'>{real_title}</a>"
+        if iv_link and real_title:
+            # 【最终优化外观】
+            # 1. 隐形链接：<a href='iv_link'>&#8203;</a> 用于强制显示大图预览
+            # 2. 显示文本：文章的真实标题 (real_title)，链接指向 Telegraph
+            msg_text = f"<a href='{iv_link}'>&#8203;</a><b><a href='{iv_link}'>{real_title}</a></b>"
         else:
-            # 失败兜底：发送原链接
+            # 失败兜底
             msg_text = article_url
 
-        # 3. 发送
+        # 发送
         send_msg(msg_text)
 
-        # 4. 更新记录
+        # 更新记录
         with open(DB_FILE, "w") as f:
             f.write(latest_id)
         print("完成")
