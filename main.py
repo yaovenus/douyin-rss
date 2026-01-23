@@ -43,6 +43,8 @@ def main():
     # 获取最新一篇文章
     latest_entry = feed.entries[0]
     latest_id = latest_entry.get("id", latest_entry.get("link", ""))
+    
+    # 关键点：在这个 RSS 源里，latest_title 才是真正的文章链接
     latest_title = latest_entry.title
     latest_link = latest_entry.link
 
@@ -57,14 +59,14 @@ def main():
         print(f"发现更新: {latest_title}")
         
         # 1. 构造消息文本
-        # 技巧：使用 <code> 标签包裹链接，在 Telegram 手机端点击即可自动复制
+        # 改动在这里：灰色框内现在填入的是 latest_title (即长链接)
         msg_text = (
             f"📢 <b><a href='{latest_link}'>{latest_title}</a></b>\n\n"
             f"👇 点下方灰框复制链接：\n"
-            f"<code>{latest_link}</code>"
+            f"<code>{latest_title}</code>"
         )
 
-        # 2. 构造按钮 (只保留一个查看原网页)
+        # 2. 构造按钮 (保留查看原网页)
         keyboard = {
             "inline_keyboard": [
                 [
