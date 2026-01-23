@@ -11,50 +11,70 @@ from html_telegraph_poster import TelegraphPoster
 RSS_URL = "http://129.150.45.187:120/telegram/channel/featuredofpincong"
 BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 CHAT_ID = os.environ["TG_CHAT_ID"]
-# 新增：从 Secrets 获取 Telegraph Token
-TELEGRAPH_TOKEN = os.environ["TELEGRAPH_TOKEN"] 
+TELEGRAPH_TOKEN = os.environ["TELEGRAPH_TOKEN"]
 DB_FILE = "last_processed_id.txt"
 
-# --- 功能函数：发布到 Telegraph ---
+# --- 核心功能：强力清洗并发布 ---
 def post_to_telegraph(url, title):
     try:
-        # 初始化发布器
         t = TelegraphPoster(use_api=True, access_token=TELEGRAPH_TOKEN)
         
-        # 1. 抓取原网页内容
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0'}
         response = requests.get(url, headers=headers, timeout=10)
         response.encoding = 'utf-8'
         
-        # 2. 清洗 HTML (只保留 body)
-        # 这一步很重要，Telegraph 不喜欢复杂的 script 和 header
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 尝试找到正文区域 (针对 Project Gutenberg / Pincong 的结构)
-        # 如果找不到特定 class，就用 body
-        content = soup.find('div', class_='post_content') 
+        # 1. 定位正文
+        # 针对该网站结构，通常内容在 class="post_content" 或 "article" 中
+        content = soup.find('div', class_='post_content')
+        if not content:
+            content = soup.find('article')
         if not content:
             content = soup.body
 
-        # 移除可能导致报错的标签
-        for tag in content(['script', 'style', 'iframe', 'button', 'input']):
+        # 2. 【深度净化】移除干扰元素
+        # 定义要删除的关键词 (类名或ID包含这些词的元素会被删掉)
+        garbage_keywords = [
+            'related', 'recommend', 'footer', 'sidebar', 'nav', 'menu', 
+            'comment', 'share', 'ads', 'promo', 'pager', 'pagination', 
+            'next', 'prev', 'copyright'
+        ]
+
+        # 删除所有 <script>, <style>, <iframe... 等标签
+        for tag in content(['script', 'style', 'iframe', 'button', 'input', 'form', 'noscript']):
             tag.decompose()
 
-        # 3. 发布
-        # html_telegraph_poster 会自动把 HTML 转换成 Telegraph 格式
+        # 针对 div, ul, section 等容器进行关键词扫描
+        for tag in content.find_all(['div', 'ul', 'section', 'aside', 'footer', 'nav']):
+            # 获取 class 和 id 属性
+            classes = tag.get('class', [])
+            ids = tag.get('id', [])
+            # 组合成字符串方便检查
+            check_str = " ".join(classes) + " " + str(ids)
+            
+            # 如果包含垃圾关键词，直接删除该区块
+            if any(keyword in check_str.lower() for keyword in garbage_keywords):
+                tag.decompose()
+        
+        # 额外清理：删除很多博客底部都会有的“空链接”或“标签列表”
+        for tag in content.find_all('div', class_='tags'):
+            tag.decompose()
+
+        # 3. 发布到 Telegraph
         result = t.post(
             title=title,
             author='品葱精选',
             author_url=url,
             text=str(content)
         )
-        return result['url'] # 返回生成的 Telegraph 链接
+        return result['url']
 
     except Exception as e:
         print(f"Telegraph 发布失败: {e}")
         return None
 
-# --- 功能函数：获取真实标题 ---
+# --- 获取标题 ---
 def get_website_title(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -62,22 +82,23 @@ def get_website_title(url):
         response.encoding = 'utf-8'
         match = re.search(r'<title>(.*?)</title>', response.text, re.IGNORECASE)
         if match:
-            return match.group(1).strip()
+            # 清理标题中的多余后缀 (比如 " - 品葱")
+            clean_title = match.group(1).split('|')[0].split('-')[0].strip()
+            return clean_title
     except:
         pass
     return "未命名文章"
 
-# --- 发送 Telegram 消息 ---
-def send_msg(text, reply_markup=None):
+# --- 发送消息 (极简版) ---
+def send_msg(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {
         "chat_id": CHAT_ID, 
         "text": text, 
         "parse_mode": "HTML",
-        "disable_web_page_preview": False # 开启预览！因为我们要展示 Telegraph 的大图
+        # 关键：开启预览，这样才会显示 Instant View 卡片
+        "disable_web_page_preview": False 
     }
-    if reply_markup:
-        data["reply_markup"] = json.dumps(reply_markup)
     requests.post(url, data=data)
 
 # --- 主程序 ---
@@ -94,56 +115,35 @@ def main():
         return
 
     entry = feed.entries[0]
-    # 在这个 RSS 源里，标题就是文章链接
-    article_url = entry.title
+    article_url = entry.title # 原始 RSS 特性
     latest_id = entry.get("id", entry.get("link", ""))
 
-    # 读取记录
     last_id = ""
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r") as f:
             last_id = f.read().strip()
 
     if latest_id != last_id:
-        print(f"发现新文章，正在处理: {article_url}")
+        print(f"处理新文章: {article_url}")
         
-        # 1. 获取真实标题
+        # 1. 获取并净化标题
         real_title = get_website_title(article_url)
-        print(f"标题: {real_title}")
-
-        # 2. 生成 Telegraph 即时预览页面
-        print("正在生成 Telegraph 页面...")
+        
+        # 2. 生成纯净版 IV 页面
         iv_link = post_to_telegraph(article_url, real_title)
         
         if iv_link:
-            # 成功生成！
-            # 构造消息：
-            # 这里的 <a href='{iv_link}'>&#8203;</a> 是隐形链接，用于强制显示预览图
-            # 标题点击跳转到 Telegraph 页面
-            msg_text = (
-                f"<a href='{iv_link}'>&#8203;</a>"
-                f"⚡️ <b><a href='{iv_link}'>{real_title}</a></b>\n\n"
-                f"👇 原文链接 (点击复制)：\n"
-                f"<code>{article_url}</code>"
-            )
-            # 按钮：也指向 Telegraph
-            keyboard = {
-                "inline_keyboard": [[
-                    {"text": "📖 阅读即时预览", "url": iv_link},
-                    {"text": "🔗 原网页", "url": article_url}
-                ]]
-            }
+            # 【极简外观】
+            # 只发送一个超链接标题。
+            # Telegram 会检测到这个链接是 telegra.ph，自动展示 IV 按钮。
+            # 这里的 href 是 Telegraph 的链接，显示的文字是文章标题。
+            msg_text = f"<a href='{iv_link}'>{real_title}</a>"
         else:
-            # 失败兜底：回退到 V1.0 逻辑
-            msg_text = (
-                f"📢 <b><a href='{article_url}'>{real_title}</a></b>\n\n"
-                f"👇 点下方灰框复制链接：\n"
-                f"<code>{article_url}</code>"
-            )
-            keyboard = None
+            # 失败兜底：发送原链接
+            msg_text = article_url
 
         # 3. 发送
-        send_msg(msg_text, reply_markup=keyboard)
+        send_msg(msg_text)
 
         # 4. 更新记录
         with open(DB_FILE, "w") as f:
