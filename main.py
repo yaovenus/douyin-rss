@@ -11,85 +11,57 @@ from html_telegraph_poster import TelegraphPoster
 RSS_URL = "http://129.150.45.187:120/telegram/channel/featuredofpincong"
 BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 CHAT_ID = os.environ["TG_CHAT_ID"]
-TELEGRAPH_TOKEN = os.environ["TELEGRAPH_TOKEN"]
+TELEGRAPH_TOKEN = os.environ["TELEGRAPH_TOKEN"] 
 DB_FILE = "last_processed_id.txt"
 
-# --- 核心功能：生成纯净文章 (V2.3 强力清洗版) ---
-def post_to_telegraph(url):
+# --- 功能函数：发布到 Telegraph ---
+def post_to_telegraph(url, title):
     try:
         t = TelegraphPoster(use_api=True, access_token=TELEGRAPH_TOKEN)
         
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0'}
         response = requests.get(url, headers=headers, timeout=10)
         response.encoding = 'utf-8'
         
         soup = BeautifulSoup(response.text, 'html.parser')
-
-        # === 1. 全局大扫除 (防止抓错图片/内容) ===
-        # 在找正文之前，先把页脚、推荐、侧边栏统统删掉
-        for tag in soup(['footer', 'nav', 'aside', 'script', 'style', 'noscript', 'iframe']):
-            tag.decompose()
-            
-        # 根据关键词删除干扰区块 (推荐阅读、评论、广告)
-        garbage_classes = ['related', 'recommend', 'comment', 'share', 'sidebar', 'footer', 'bottom', 'ads', 'meta']
-        for tag in soup.find_all('div'):
-            classes = tag.get('class', [])
-            if classes:
-                class_str = " ".join(classes).lower()
-                if any(bad in class_str for bad in garbage_classes):
-                    tag.decompose()
-
-        # === 2. 寻找正文 ===
-        content = None
-        # 尝试标准标签和常见ID/Class
-        content = soup.find('main')
-        if not content:
-            content = soup.find('article')
-        if not content:
-            content = soup.find(id=re.compile(r'(post|entry|content|article)', re.I))
-        if not content:
-            content = soup.find('div', class_=re.compile(r'(post|entry|content|article)', re.I))
+        
+        # 定位正文
+        content = soup.find('div', class_='post_content') 
         if not content:
             content = soup.body
 
-        # === 3. 获取标题 (智能提取) ===
-        real_title = ""
-        h1 = soup.find('h1')
-        if h1:
-            real_title = h1.get_text().strip()
-        
-        # 兜底：用网页 Title
-        if not real_title and soup.title:
-            real_title = soup.title.string.strip()
-            
-        # 清理标题后缀
-        if real_title:
-            real_title = real_title.split(' - ')[0].split(' | ')[0]
-        else:
-            real_title = "精选文章"
+        # 移除干扰标签
+        for tag in content(['script', 'style', 'iframe', 'button', 'input']):
+            tag.decompose()
 
-        # === 4. 发布 ===
-        # 内容过短保护
-        if content and len(content.get_text()) < 50:
-            print("警告：抓取内容过短，放弃生成预览")
-            return None, None
-
+        # 发布
         result = t.post(
-            title=real_title,
+            title=title,
             author='品葱精选',
             author_url=url,
             text=str(content)
         )
-        
-        return result['url'], real_title
+        return result['url']
 
     except Exception as e:
         print(f"Telegraph 发布失败: {e}")
-        return None, None
+        return None
 
-# --- 发送消息 (极简版) ---
-def send_msg(text):
-    # 注意：这里去掉了 reply_markup 参数，彻底删除了按钮
+# --- 功能函数：获取真实标题 ---
+def get_website_title(url):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        response.encoding = 'utf-8'
+        match = re.search(r'<title>(.*?)</title>', response.text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    except:
+        pass
+    return "未命名文章"
+
+# --- 发送 Telegram 消息 ---
+def send_msg(text, reply_markup=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {
         "chat_id": CHAT_ID, 
@@ -97,6 +69,8 @@ def send_msg(text):
         "parse_mode": "HTML",
         "disable_web_page_preview": False 
     }
+    if reply_markup:
+        data["reply_markup"] = json.dumps(reply_markup)
     requests.post(url, data=data)
 
 # --- 主程序 ---
@@ -116,30 +90,44 @@ def main():
     article_url = entry.title
     latest_id = entry.get("id", entry.get("link", ""))
 
+    # 读取记录
     last_id = ""
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r") as f:
             last_id = f.read().strip()
 
     if latest_id != last_id:
-        print(f"处理新文章: {article_url}")
+        print(f"发现新文章，正在处理: {article_url}")
         
-        iv_link, real_title = post_to_telegraph(article_url)
+        # 1. 获取真实标题
+        real_title = get_website_title(article_url)
+        print(f"标题: {real_title}")
+
+        # 2. 生成 Telegraph 页面
+        print("正在生成 Telegraph 页面...")
+        iv_link = post_to_telegraph(article_url, real_title)
         
-        if iv_link and real_title:
-            # === 极简消息构造 ===
-            # 我们删除了 ①(闪电标题行) ②(复制框) ③(按钮)
-            # 只保留这一行：
-            # 第一个 <a> 是隐形链接，用于强制显示预览大图
-            # 第二个 <a> 是可见标题，用户点击它进入即时预览
-            msg_text = f"<a href='{iv_link}'>&#8203;</a><a href='{iv_link}'>{real_title}</a>"
+        if iv_link:
+            # 成功生成！
+            # 构造消息文本 (保留①标题，②复制框，④预览图)
+            msg_text = (
+                f"<a href='{iv_link}'>&#8203;</a>"
+                f"⚡️ <b><a href='{iv_link}'>{real_title}</a></b>\n\n"
+                f"👇 原文链接 (点击复制)：\n"
+                f"<code>{article_url}</code>"
+            )
         else:
             # 失败兜底
-            msg_text = article_url
+            msg_text = (
+                f"📢 <b><a href='{article_url}'>{real_title}</a></b>\n\n"
+                f"👇 点下方灰框复制链接：\n"
+                f"<code>{article_url}</code>"
+            )
 
-        # 发送 (不带按钮)
+        # 3. 发送 (不再传递 keyboard 参数，即删除了③)
         send_msg(msg_text)
 
+        # 4. 更新记录
         with open(DB_FILE, "w") as f:
             f.write(latest_id)
         print("完成")
