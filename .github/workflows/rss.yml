@@ -29,6 +29,8 @@ jobs:
       env:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        # 👇 这一行非常重要，必须加！否则脚本读不到 Secrets
+        TELEGRAPH_TOKEN: ${{ secrets.TELEGRAPH_TOKEN }}
       run: python main.py
 
     - name: Commit and push if changed
