@@ -2,8 +2,8 @@ name: Check RSS Feed
 
 on:
   schedule:
-    # 每 30 分钟运行一次 (可自行修改，比如 */15)
-    - cron: '*/30 * * * *'
+    # 每 12 小时运行一次 (可自行修改，比如 */15)
+    - cron: '0 */12 * * *'
   workflow_dispatch: # 允许手动点击运行测试
 
 jobs:
@@ -29,7 +29,7 @@ jobs:
       env:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      run: python main.py
+      run: python get_token.py
 
     - name: Commit and push if changed
       run: |
