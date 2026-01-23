@@ -61,7 +61,7 @@ def get_website_title(url):
     return "未命名文章"
 
 # --- 发送 Telegram 消息 ---
-def send_msg(text, reply_markup=None):
+def send_msg(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {
         "chat_id": CHAT_ID, 
@@ -69,8 +69,6 @@ def send_msg(text, reply_markup=None):
         "parse_mode": "HTML",
         "disable_web_page_preview": False 
     }
-    if reply_markup:
-        data["reply_markup"] = json.dumps(reply_markup)
     requests.post(url, data=data)
 
 # --- 主程序 ---
@@ -109,19 +107,16 @@ def main():
         
         if iv_link:
             # 成功生成！
-            # 构造消息文本 (保留①标题，②复制框，④预览图)
+            # 构造消息文本 (删除了复制框，只保留隐形预览链接和标题)
             msg_text = (
                 f"<a href='{iv_link}'>&#8203;</a>"
-                
+                f"⚡️ <b><a href='{iv_link}'>{real_title}</a></b>"
             )
         else:
-            # 失败兜底
-            msg_text = (
-                f"📢 <b><a href='{article_url}'>{real_title}</a></b>\n\n"
-             
-            )
+            # 失败兜底 (也只保留标题链接)
+            msg_text = f"📢 <b><a href='{article_url}'>{real_title}</a></b>"
 
-        # 3. 发送 (不再传递 keyboard 参数，即删除了③)
+        # 3. 发送
         send_msg(msg_text)
 
         # 4. 更新记录
