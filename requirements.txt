@@ -1,4 +1,2 @@
-playwright
-feedgen
-lxml
-playwright-stealth==1.0.6
+feedparser
+requests
