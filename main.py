@@ -112,16 +112,13 @@ def main():
             # 构造消息文本 (保留①标题，②复制框，④预览图)
             msg_text = (
                 f"<a href='{iv_link}'>&#8203;</a>"
-                f"⚡️ <b><a href='{iv_link}'>{real_title}</a></b>\n\n"
-                f"👇 原文链接 (点击复制)：\n"
-                f"<code>{article_url}</code>"
+                
             )
         else:
             # 失败兜底
             msg_text = (
                 f"📢 <b><a href='{article_url}'>{real_title}</a></b>\n\n"
-                f"👇 点下方灰框复制链接：\n"
-                f"<code>{article_url}</code>"
+             
             )
 
         # 3. 发送 (不再传递 keyboard 参数，即删除了③)
