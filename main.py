@@ -25,57 +25,69 @@ def post_to_telegraph(url):
         
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 1. 【定位正文】
-        content = soup.find('div', class_='post_content')
-        if not content:
-            content = soup.find('div', class_='entry-content')
+        # === 第一步：全局大扫除 (关键步骤) ===
+        # 在找正文之前，先把页脚、推荐、侧边栏统统删掉
+        # 这样可以防止脚本误把“下一篇文章”当成“正文”
+        for tag in soup(['footer', 'nav', 'aside', 'script', 'style', 'noscript', 'iframe']):
+            tag.decompose()
+            
+        # 根据关键词删除干扰区块 (推荐阅读、评论、广告)
+        garbage_classes = ['related', 'recommend', 'comment', 'share', 'sidebar', 'footer', 'bottom', 'ads', 'meta']
+        for tag in soup.find_all('div'):
+            # 检查 class 是否包含垃圾关键词
+            classes = tag.get('class', [])
+            if classes:
+                class_str = " ".join(classes).lower()
+                if any(bad in class_str for bad in garbage_classes):
+                    tag.decompose()
+
+        # === 第二步：寻找幸存的正文 ===
+        # 按照优先级尝试不同的容器
+        content = None
+        
+        # 1. 尝试标准 HTML5 标签
+        content = soup.find('main')
         if not content:
             content = soup.find('article')
+            
+        # 2. 尝试常见的 ID
+        if not content:
+            content = soup.find(id=re.compile(r'(post|entry|content|article)', re.I))
+            
+        # 3. 尝试常见的 Class (范围放宽)
+        if not content:
+            content = soup.find('div', class_=re.compile(r'(post|entry|content|article)', re.I))
+            
+        # 4. 最后的兜底：如果还没找到，且 body 还在，就用 body
         if not content:
             content = soup.body
 
-        # 2. 【智能标题提取】
-        # 很多时候 H1 是栏目名，H2 才是文章名
-        # 我们尝试把它们组合起来，或者优先取长的那个
+        # === 第三步：获取标题 ===
+        # 优先抓 H1 (通常是文章标题)
+        real_title = ""
         h1 = soup.find('h1')
-        h2 = soup.find('h2')
+        if h1:
+            real_title = h1.get_text().strip()
         
-        title_h1 = h1.get_text().strip() if h1 else ""
-        title_h2 = h2.get_text().strip() if h2 else ""
-        
-        # 逻辑：如果 H2 存在且长度大于 H1，通常 H2 才是真标题
-        if title_h2 and len(title_h2) > len(title_h1):
-            real_title = title_h2
-        elif title_h1 and title_h2:
-            # 如果两个都有，拼起来：栏目 | 标题
-            real_title = f"{title_h1} | {title_h2}"
-        else:
-            # 兜底：优先用 H1，没有就用网页 Title
-            real_title = title_h1 if title_h1 else (soup.title.string.strip() if soup.title else "未命名文章")
-
-        # 再次清理标题中的管道符后缀
-        real_title = real_title.split(' - ')[0]
-
-        # 3. 【精准清洗】
-        # 删除脚本、样式、按钮
-        for tag in content(['script', 'style', 'iframe', 'noscript', 'button', 'input', 'form']):
-            tag.decompose()
+        # 如果没抓到 H1，用网页 Title
+        if not real_title and soup.title:
+            real_title = soup.title.string.strip()
             
-        # 删除特定的垃圾 Class (广告、推荐、侧边栏)
-        # 只要 class 名字里包含这些词，就删掉该区块
-        garbage_words = ['share', 'comment', 'ads', 'related', 'recommend', 'footer', 'sidebar', 'meta', 'info']
-        for tag in content.find_all(['div', 'ul', 'section', 'aside']):
-            classes = tag.get('class', [])
-            # 把 list 转成字符串匹配
-            class_str = " ".join(classes).lower()
-            if any(bad in class_str for bad in garbage_words):
-                tag.decompose()
+        # 清理标题后缀
+        if real_title:
+            real_title = real_title.split(' - ')[0].split(' | ')[0]
+        else:
+            real_title = "精选文章"
 
-        # 4. 【发布】
-        # 注意：这里不再手动插入 img 标签
-        # 让 Telegraph 自动渲染 content 里原本存在的图片
-        # 这样能确保图片和文字的顺序是正确的，绝不会张冠李戴
-        
+        # === 第四步：安全检查 ===
+        # 如果抓到的内容太短（少于50字），说明可能抓错了或者没抓到
+        # 这时候宁愿不生成 IV，也不要发错误的内容
+        if content and len(content.get_text()) < 50:
+            print("警告：抓取到的正文过短，可能抓取失败")
+            return None, None
+
+        # === 第五步：发布 ===
+        # 此时 content 里的图片和文字都是正文原本的，因为垃圾已经在第一步被删掉了
         result = t.post(
             title=real_title,
             author='品葱精选',
@@ -128,10 +140,11 @@ def main():
         iv_link, real_title = post_to_telegraph(article_url)
         
         if iv_link and real_title:
-            # 极简模式：只发一个带标题的链接
-            # 隐形链接 &#8203; 用于触发预览
+            # 成功：发送带有 Instant View 的标题链接
             msg_text = f"<a href='{iv_link}'>&#8203;</a><b><a href='{iv_link}'>{real_title}</a></b>"
         else:
+            # 失败兜底：如果不幸抓取失败（比如内容太短），直接发原链接
+            # 这样至少用户还能看，不会看到乱七八糟的“垃圾回收”文章
             msg_text = article_url
 
         send_msg(msg_text)
