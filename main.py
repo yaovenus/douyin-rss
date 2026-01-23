@@ -45,10 +45,16 @@ def main():
             last_id = f.read().strip()
 
     # 3. 对比：如果是新文章
-    if latest_id != last_id:
-        print("发现更新，准备发送...")
-        msg = f"📢 <b>新文章发布</b>\n\n{latest_title}\n\n🔗 <a href='{latest_link}'>点击阅读</a>"
-        
+        if latest_id != last_id:
+        # 使用 rhash (Telegram 的即时预览模板 ID)
+        # 下面这个 rhash 是通用的或者你需要去找一个针对该网站好用的 rhash
+        # 这里用一个示例，如果 CorsaBot 有公开的 rhash 更好
+        rhash = "你的_RHASH_值" 
+        iv_url = f"https://t.me/iv?url={latest_link}&rhash={rhash}"
+
+        # 直接把 IV 链接发出去，Telegram 会自动显示预览
+        msg = f"<a href='{iv_url}'>&#8203;</a><b>{latest_title}</b>\n\n原链：{latest_link}"
+          
         # 发送 Telegram (支持 HTML 格式)
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {
